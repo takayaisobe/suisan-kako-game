@@ -88,7 +88,13 @@ export function canActToday(p: Player): boolean {
 }
 export function inventoryUsed(p: Player): number {
   const sum = (r: Record<string, number>) => Object.values(r).reduce((a, b) => a + b, 0);
-  return sum(p.rawInventory) + sum(p.frozenInventory) + sum(p.thawedInventory) + sum(p.productInventory);
+  return (
+    sum(p.rawInventory) +
+    sum(p.frozenInventory) +
+    sum(p.thawingInventory) +
+    sum(p.thawedInventory) +
+    sum(p.productInventory)
+  );
 }
 export function inventoryLeft(p: Player): number {
   return Math.max(0, p.inventoryCapacity - inventoryUsed(p));
@@ -142,6 +148,7 @@ function makePlayer(id: number, name: string, isCpu: boolean): Player {
     cash: INITIAL_CAPITAL,
     rawInventory: {},
     frozenInventory: {},
+    thawingInventory: {},
     thawedInventory: {},
     productInventory: {},
     staff: {
@@ -257,11 +264,20 @@ function beginTurn(state: GameState): GameState {
   state.superSold = {};
   state.ecSold = {};
   for (const p of state.players) {
-    // 前日に解凍したまま加工しなかった原魚は傷んで廃棄
-    const rotted = Object.values(p.thawedInventory).reduce((a, b) => a + b, 0);
-    if (rotted > 0) {
-      pushLog(state, `${p.name}：解凍したまま使わなかった原魚 ${rotted}kg が傷んで廃棄`);
-      p.thawedInventory = {};
+    // ① 解凍済みのまま使わなかったぶんは傷んで廃棄
+    const rottedThawed = Object.values(p.thawedInventory).reduce((a, b) => a + b, 0);
+    if (rottedThawed > 0) {
+      pushLog(state, `${p.name}：解凍したまま使わなかった原魚 ${rottedThawed}kg が傷んで廃棄`);
+    }
+    p.thawedInventory = {};
+    // ② 前日に解凍指示したぶんが本日使える状態に（解凍中→解凍済み）
+    p.thawedInventory = { ...p.thawingInventory };
+    p.thawingInventory = {};
+    // ③ 生のまま加工/冷凍/販売しなかった原魚は傷んで廃棄
+    const rottedRaw = Object.values(p.rawInventory).reduce((a, b) => a + b, 0);
+    if (rottedRaw > 0) {
+      pushLog(state, `${p.name}：生のまま使わなかった原魚 ${rottedRaw}kg が傷んで廃棄`);
+      p.rawInventory = {};
     }
     p.usedSalesKg = 0;
     p.turnDone = false;
@@ -323,6 +339,10 @@ function addThawed(p: Player, speciesId: string, kg: number): void {
   p.thawedInventory[speciesId] = (p.thawedInventory[speciesId] ?? 0) + kg;
   if (p.thawedInventory[speciesId] <= 0) delete p.thawedInventory[speciesId];
 }
+function addThawing(p: Player, speciesId: string, kg: number): void {
+  p.thawingInventory[speciesId] = (p.thawingInventory[speciesId] ?? 0) + kg;
+  if (p.thawingInventory[speciesId] <= 0) delete p.thawingInventory[speciesId];
+}
 function addProduct(p: Player, productId: string, kg: number): void {
   p.productInventory[productId] = (p.productInventory[productId] ?? 0) + kg;
   if (p.productInventory[productId] <= 0) delete p.productInventory[productId];
@@ -379,14 +399,14 @@ export function applyCommand(prev: GameState, command: Command): GameState {
     }
 
     case "thaw": {
-      // 解凍は朝（セリ前）の準備。解凍した原魚はその日に加工しないと翌朝腐る。
+      // 解凍は前日（朝の準備）に指示。翌朝に「解凍済み」となり、その日に加工/販売しないと腐る。
       if (state.phase !== "purchase") return prev;
       const p = state.players[command.playerId];
       const kg = Math.min(command.kg, p.frozenInventory[command.speciesId] ?? 0);
       if (kg <= 0) return prev;
       addFrozen(p, command.speciesId, -kg);
-      addThawed(p, command.speciesId, kg);
-      pushLog(state, `${p.name}：${speciesById(command.speciesId).name} ${kg}kgを解凍（本日中に加工を）`);
+      addThawing(p, command.speciesId, kg);
+      pushLog(state, `${p.name}：${speciesById(command.speciesId).name} ${kg}kgを解凍開始（翌日使える）`);
       return state;
     }
 
@@ -550,7 +570,8 @@ function doManufacture(state: GameState, playerId: number, productId: string, kg
 
 // ---- 販売（相乗り・3販路） ----
 function ownedKg(p: Player, item: SaleItem): number {
-  if (item.kind === "raw") return p.rawInventory[item.id] ?? 0;
+  // 原魚は「解凍済み＋生」の合計（どちらも中央市場で売れる）
+  if (item.kind === "raw") return (p.thawedInventory[item.id] ?? 0) + (p.rawInventory[item.id] ?? 0);
   return p.productInventory[item.id] ?? 0;
 }
 
@@ -587,9 +608,11 @@ function resolveSale(state: GameState): void {
       if (kg <= 0) continue;
 
       if (item.kind === "raw") {
-        // 中央市場（無制限）
+        // 中央市場（無制限）。解凍済みから先に出す（再冷凍できず腐るため）。
         revenue += rawMarketPrice(state, item.id) * kg;
-        addRaw(p, item.id, -kg);
+        const fromThawed = Math.min(kg, p.thawedInventory[item.id] ?? 0);
+        if (fromThawed > 0) addThawed(p, item.id, -fromThawed);
+        if (kg - fromThawed > 0) addRaw(p, item.id, -(kg - fromThawed));
         p.usedSalesKg += kg;
         continue;
       }

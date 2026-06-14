@@ -102,7 +102,7 @@ export function PurchasePhase({ state, dispatch }: Props) {
               </button>
             ))
           )}
-          <span className="muted small">※解凍した魚は本日中に加工しないと腐ります</span>
+          <span className="muted small">※解凍は翌日使える状態に。使う日に加工/販売しないと腐ります（再冷凍不可）</span>
         </div>
       </div>
 

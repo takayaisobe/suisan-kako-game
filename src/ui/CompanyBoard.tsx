@@ -15,6 +15,7 @@ import {
   rawList,
   speciesName,
   thawedList,
+  thawingList,
   yen,
 } from "./format.ts";
 import {
@@ -39,6 +40,7 @@ export function CompanyBoard({ player, active }: Props) {
   const color = PLAYER_COLORS[player.id % PLAYER_COLORS.length];
   const raws = rawList(player);
   const frozen = frozenList(player);
+  const thawing = thawingList(player);
   const thawed = thawedList(player);
   const products = productList(player);
   const used = inventoryUsed(player);
@@ -156,11 +158,16 @@ export function CompanyBoard({ player, active }: Props) {
             </span>
           ))}
           {thawed.map((t) => (
-            <span className="chip warn-chip" key={"t" + t.id} title="本日中に加工しないと腐る">
-              解凍{speciesName(t.id)} {t.kg}
+            <span className="chip warn-chip" key={"t" + t.id} title="本日中に加工/販売しないと腐る">
+              解凍済{speciesName(t.id)} {t.kg}
             </span>
           ))}
-          {raws.length === 0 && products.length === 0 && thawed.length === 0 && (
+          {thawing.map((t) => (
+            <span className="chip" key={"tg" + t.id} title="明日使える（解凍中）">
+              解凍中{speciesName(t.id)} {t.kg}
+            </span>
+          ))}
+          {raws.length === 0 && products.length === 0 && thawed.length === 0 && thawing.length === 0 && (
             <span className="muted small">在庫なし</span>
           )}
         </div>

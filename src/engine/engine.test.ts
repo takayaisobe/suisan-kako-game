@@ -189,37 +189,68 @@ function day2PurchaseWithFrozenMadai(): { g: GameState; kg: number } {
   return { g, kg };
 }
 
+// セリ前に解凍指示→1日経過→翌日のaction（解凍済みが使える状態）まで進める
+function day3ActionWithThawed(): { g: GameState; kg: number } {
+  const r = day2PurchaseWithFrozenMadai();
+  let g = applyCommand(r.g, { type: "thaw", playerId: 0, speciesId: "madai", kg: r.kg });
+  g = applyCommand(g, { type: "submitBids", playerId: 0 });
+  g = applyCommand(g, { type: "submitBids", playerId: 1 });
+  g = applyCommand(g, { type: "proceedToAction" }); // 解凍指示した日(day2)の操業
+  g = applyCommand(g, { type: "pass", playerId: 0 });
+  g = applyCommand(g, { type: "pass", playerId: 1 }); // → day3 朝に thawing→thawed
+  g = applyCommand(g, { type: "proceedToPurchase" });
+  g = applyCommand(g, { type: "submitBids", playerId: 0 });
+  g = applyCommand(g, { type: "submitBids", playerId: 1 });
+  g = applyCommand(g, { type: "proceedToAction" }); // day3 操業（解凍済みが使える）
+  return { g, kg: r.kg };
+}
+
+describe("生の原魚の腐敗", () => {
+  it("生のまま使わず冷凍もしないと翌朝腐る", () => {
+    let g = buyAndReachAction(7);
+    const kg = g.players[0].rawInventory["madai"] ?? 0;
+    expect(kg).toBeGreaterThan(0);
+    g = applyCommand(g, { type: "pass", playerId: 0 });
+    g = applyCommand(g, { type: "pass", playerId: 1 });
+    expect(g.players[0].rawInventory["madai"] ?? 0).toBe(0); // 腐った
+  });
+
+  it("冷凍すれば腐らずに保存できる", () => {
+    let g = buyAndReachAction(7);
+    const kg = g.players[0].rawInventory["madai"] ?? 0;
+    g = applyCommand(g, { type: "freeze", playerId: 0, speciesId: "madai", kg });
+    g = applyCommand(g, { type: "pass", playerId: 0 });
+    g = applyCommand(g, { type: "pass", playerId: 1 });
+    expect(g.players[0].frozenInventory["madai"]).toBe(kg);
+    expect(g.players[0].rawInventory["madai"] ?? 0).toBe(0);
+  });
+});
+
 describe("解凍と腐敗", () => {
-  it("解凍はセリ前に行い、冷凍庫→解凍在庫へ移る", () => {
+  it("解凍指示は冷凍庫→解凍中（その日はまだ使えない）", () => {
     const { g: g0, kg } = day2PurchaseWithFrozenMadai();
     expect(kg).toBeGreaterThan(0);
     const g = applyCommand(g0, { type: "thaw", playerId: 0, speciesId: "madai", kg });
-    expect(g.players[0].thawedInventory["madai"]).toBe(kg);
+    expect(g.players[0].thawingInventory["madai"]).toBe(kg);
+    expect(g.players[0].thawedInventory["madai"] ?? 0).toBe(0);
     expect(g.players[0].frozenInventory["madai"] ?? 0).toBe(0);
   });
 
-  it("解凍した原魚を使わないと翌朝腐って消える", () => {
-    const { g: g0, kg } = day2PurchaseWithFrozenMadai();
-    let g = applyCommand(g0, { type: "thaw", playerId: 0, speciesId: "madai", kg });
-    g = applyCommand(g, { type: "submitBids", playerId: 0 });
-    g = applyCommand(g, { type: "submitBids", playerId: 1 });
-    g = applyCommand(g, { type: "proceedToAction" });
-    expect(g.players[0].thawedInventory["madai"]).toBe(kg); // まだ残っている
-    // 加工せずに1日を終える
-    g = applyCommand(g, { type: "pass", playerId: 0 });
+  it("翌日に解凍済みになり、その日に使わないとさらに翌朝腐る", () => {
+    const { g: g0, kg } = day3ActionWithThawed();
+    // day3 操業：解凍済みが使える状態
+    expect(g0.players[0].thawedInventory["madai"]).toBe(kg);
+    expect(g0.players[0].thawingInventory["madai"] ?? 0).toBe(0);
+    // 使わずに1日終了
+    let g = applyCommand(g0, { type: "pass", playerId: 0 });
     g = applyCommand(g, { type: "pass", playerId: 1 });
-    // 翌朝：腐って消える
-    expect(g.players[0].thawedInventory["madai"] ?? 0).toBe(0);
+    expect(g.players[0].thawedInventory["madai"] ?? 0).toBe(0); // 腐った
   });
 
-  it("解凍した原魚は製造で優先的に消費される", () => {
-    const { g: g0, kg } = day2PurchaseWithFrozenMadai();
-    let g = applyCommand(g0, { type: "thaw", playerId: 0, speciesId: "madai", kg });
-    g = applyCommand(g, { type: "submitBids", playerId: 0 });
-    g = applyCommand(g, { type: "submitBids", playerId: 1 });
-    g = applyCommand(g, { type: "proceedToAction" });
+  it("解凍済みは製造で優先的に消費される", () => {
+    const { g: g0, kg } = day3ActionWithThawed();
     const useKg = Math.min(kg, 5);
-    g = applyCommand(g, { type: "manufacture", playerId: 0, productId: "madai_kirimi", kg: useKg });
+    const g = applyCommand(g0, { type: "manufacture", playerId: 0, productId: "madai_kirimi", kg: useKg });
     expect(g.players[0].productInventory["madai_kirimi"]).toBe(useKg);
     expect(g.players[0].thawedInventory["madai"] ?? 0).toBe(kg - useKg);
   });

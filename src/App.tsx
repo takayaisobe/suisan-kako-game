@@ -24,7 +24,7 @@ type NetCtrl = HostController | GuestController;
 
 // ---- セーブ／ロード（localStorage） ----
 const SAVE_KEY = "suisan-kako-save";
-const SAVE_VERSION = 2;
+const SAVE_VERSION = 3; // 鮮度モデル（thawingInventory等）でPlayer形状が変わったため更新
 
 function loadGame(): GameState | null {
   try {

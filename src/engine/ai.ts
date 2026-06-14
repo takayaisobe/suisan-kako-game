@@ -61,37 +61,37 @@ function planBids(state: GameState, p: Player): Command[] {
   const aggression = 0.55 + (p.id % 3) * 0.07;
   let budget = p.cash * 0.6;
   let space = inventoryLeft(p);
-  // 利益が大きそうな魚種から
+  // 生は当日に使わないと腐るので、1日で加工できる量＋αに絞って買う（腐敗防止）
+  let quota = mfgDailyKg(p) + 5;
   const lots = [...state.market].sort(
     (a, b) => speciesById(b.speciesId).rawSellPrice - speciesById(a.speciesId).rawSellPrice,
   );
   for (const lot of lots) {
-    if (space <= 0 || budget <= lot.minPrice) continue;
+    if (space <= 0 || quota <= 0 || budget <= lot.minPrice) continue;
     const sp = speciesById(lot.speciesId);
     const bid = Math.max(lot.minPrice, Math.round(sp.rawSellPrice * aggression));
-    // 単価bidで、予算と在庫の範囲で買いたい数量
-    const wantKg = Math.min(lot.kg, space, Math.floor(budget / bid));
+    const wantKg = Math.min(lot.kg, space, quota, Math.floor(budget / bid));
     if (wantKg <= 0) continue;
     cmds.push({ type: "setBid", playerId: p.id, lotId: lot.id, pricePerKg: bid, qtyKg: wantKg });
     budget -= bid * wantKg;
     space -= wantKg;
+    quota -= wantKg;
   }
   cmds.push({ type: "submitBids", playerId: p.id });
   return cmds;
 }
 
 // ---- 操業（製造 or 販売 or パス） ----
-function hasRaw(p: Player): boolean {
-  return sum(p.rawInventory) > 0;
-}
-
 /** いま実際に売れる量（kg）があるか。チャネル満杯や枠切れを考慮。 */
 function sellableKgNow(state: GameState, p: Player): number {
   if (salesLeft(p) <= 0) return 0;
   let total = 0;
   const keep = mfgKgPerProduct(p);
-  // 原魚は中央市場が無制限。1バッチは加工用に残す前提で余剰のみ
-  for (const [, kg] of Object.entries(p.rawInventory)) total += Math.max(0, kg - keep);
+  // 原魚（生＋解凍済み）は中央市場が無制限。1バッチは加工用に残す前提で余剰のみ
+  const rawBy: Record<string, number> = {};
+  for (const [sp, kg] of Object.entries(p.rawInventory)) rawBy[sp] = (rawBy[sp] ?? 0) + kg;
+  for (const [sp, kg] of Object.entries(p.thawedInventory)) rawBy[sp] = (rawBy[sp] ?? 0) + kg;
+  for (const kg of Object.values(rawBy)) total += Math.max(0, kg - keep);
   // 製品はチャネルの空きまで
   for (const [pid, kg] of Object.entries(p.productInventory)) {
     if (kg <= 0) continue;
@@ -104,29 +104,50 @@ function sellableKgNow(state: GameState, p: Player): number {
   return Math.min(total, salesLeft(p));
 }
 
+/** 製造に使わない生原魚を冷凍するコマンド（腐敗防止）。 */
+function freezeLeftoverRaw(p: Player, keepSpecies: string | null, keepKg: number): Command[] {
+  const cmds: Command[] = [];
+  for (const [sp, kg] of Object.entries(p.rawInventory)) {
+    const keep = sp === keepSpecies ? Math.min(keepKg, kg) : 0;
+    const toFreeze = kg - keep;
+    if (toFreeze > 0) cmds.push({ type: "freeze", playerId: p.id, speciesId: sp, kg: toFreeze });
+  }
+  return cmds;
+}
+
 function planTurn(state: GameState, p: Player): Command[] {
-  // 1日1アクション制：製造 か 販売 のどちらか一方を選ぶ。
+  // 1日1アクション制：製造 か 販売 のどちらか一方。余った生原魚は冷凍して腐敗を防ぐ。
   const productKg = sum(p.productInventory);
   const canSell = sellableKgNow(state, p) > 0;
-  // 製品がそこそこ溜まっていて売れるなら、まず利益を確定（販売）
+
+  // 製品がそこそこ溜まっていて売れるなら、生原魚を冷凍して保存しつつ販売
   if (canSell && productKg >= Math.min(5, Math.max(1, salesLeft(p)))) {
-    return [{ type: "declareSell", playerId: p.id }];
+    return [...freezeLeftoverRaw(p, null, 0), { type: "declareSell", playerId: p.id }];
   }
-  // 原魚があれば、その日の製造枠ぶん加工する
-  if (hasRaw(p)) {
-    const candidates = PRODUCTS.filter((pr) => (p.rawInventory[pr.speciesId] ?? 0) > 0);
-    if (candidates.length) {
-      candidates.sort((a, b) => b.priceMax - a.priceMax);
-      const pr = candidates[0];
-      const kg = Math.min(mfgDailyKg(p), p.rawInventory[pr.speciesId] ?? 0);
-      if (kg > 0) return [{ type: "manufacture", playerId: p.id, productId: pr.id, kg }];
+
+  // 原魚（生＋解凍済み）があれば、その日の製造枠ぶん加工
+  const candidates = PRODUCTS.filter(
+    (pr) => (p.rawInventory[pr.speciesId] ?? 0) + (p.thawedInventory[pr.speciesId] ?? 0) > 0,
+  );
+  if (candidates.length) {
+    candidates.sort((a, b) => b.priceMax - a.priceMax);
+    const pr = candidates[0];
+    const avail = (p.rawInventory[pr.speciesId] ?? 0) + (p.thawedInventory[pr.speciesId] ?? 0);
+    const useKg = Math.min(mfgDailyKg(p), avail);
+    if (useKg > 0) {
+      // 製造で使う魚種ぶんは残し、他は冷凍
+      return [
+        ...freezeLeftoverRaw(p, pr.speciesId, useKg),
+        { type: "manufacture", playerId: p.id, productId: pr.id, kg: useKg },
+      ];
     }
   }
-  // 加工する原魚がなくても、売れるものがあれば売る
+
+  // それ以外：売れるなら売る（生は冷凍）／無ければ生を冷凍してパス
   if (canSell) {
-    return [{ type: "declareSell", playerId: p.id }];
+    return [...freezeLeftoverRaw(p, null, 0), { type: "declareSell", playerId: p.id }];
   }
-  return [{ type: "pass", playerId: p.id }];
+  return [...freezeLeftoverRaw(p, null, 0), { type: "pass", playerId: p.id }];
 }
 
 // ---- 販売（自分の番／相乗り） ----

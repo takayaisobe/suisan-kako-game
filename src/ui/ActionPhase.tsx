@@ -22,6 +22,7 @@ import {
   rawList,
   speciesName,
   thawedList,
+  thawingList,
   yen,
 } from "./format.ts";
 import { HandOff } from "./HandOff.tsx";
@@ -333,18 +334,21 @@ function PriceMeter({
 function InventoryView({ actor }: { actor: Player }) {
   const raws = rawList(actor);
   const frozen = frozenList(actor);
+  const thawing = thawingList(actor);
   const thawed = thawedList(actor);
   const products = productList(actor);
   return (
     <div className="small muted">
       在庫 {inventoryUsed(actor)}/{actor.inventoryCapacity}kg・販売枠{salesCapacity(actor)}kg／
-      原魚:{raws.map((r) => `${speciesName(r.id)}${r.kg}`).join(" ") || "なし"}／ 冷凍:
+      原魚(生・本日中):{raws.map((r) => `${speciesName(r.id)}${r.kg}`).join(" ") || "なし"}／ 冷凍:
       {frozen.map((r) => `${speciesName(r.id)}${r.kg}`).join(" ") || "なし"}
       {thawed.length > 0 && (
         <span className="neg">
-          {" "}
-          ／ 解凍中(本日加工):{thawed.map((r) => `${speciesName(r.id)}${r.kg}`).join(" ")}
+          {" "}／ 解凍済(本日使用):{thawed.map((r) => `${speciesName(r.id)}${r.kg}`).join(" ")}
         </span>
+      )}
+      {thawing.length > 0 && (
+        <span> ／ 解凍中(明日):{thawing.map((r) => `${speciesName(r.id)}${r.kg}`).join(" ")}</span>
       )}
       ／ 製品:{products.map((r) => `${productName(r.id)}${r.kg}`).join(" ") || "なし"}
     </div>

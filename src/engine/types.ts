@@ -121,7 +121,9 @@ export interface Player {
   cash: number;
   rawInventory: Record<SpeciesId, number>; // kg
   frozenInventory: Record<SpeciesId, number>; // kg
-  /** 解凍した原魚（要加工）。その日に製造で使わないと翌朝腐る。 */
+  /** 解凍指示中（前日に解凍指示→翌朝にthawedへ。まだ使えない）。 */
+  thawingInventory: Record<SpeciesId, number>; // kg
+  /** 解凍済み（本日使える）。その日に加工/販売しないと翌朝腐る。再冷凍不可。 */
   thawedInventory: Record<SpeciesId, number>; // kg
   productInventory: Record<ProductId, number>; // kg（売却時にpc換算）
   staff: Staff;
