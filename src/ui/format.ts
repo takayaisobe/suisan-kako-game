@@ -26,6 +26,11 @@ export function frozenList(p: Player): { id: string; kg: number }[] {
     .filter(([, kg]) => kg > 0)
     .map(([id, kg]) => ({ id, kg }));
 }
+export function thawedList(p: Player): { id: string; kg: number }[] {
+  return Object.entries(p.thawedInventory)
+    .filter(([, kg]) => kg > 0)
+    .map(([id, kg]) => ({ id, kg }));
+}
 export function productList(p: Player): { id: string; kg: number }[] {
   return Object.entries(p.productInventory)
     .filter(([, kg]) => kg > 0)

@@ -121,6 +121,8 @@ export interface Player {
   cash: number;
   rawInventory: Record<SpeciesId, number>; // kg
   frozenInventory: Record<SpeciesId, number>; // kg
+  /** 解凍した原魚（要加工）。その日に製造で使わないと翌朝腐る。 */
+  thawedInventory: Record<SpeciesId, number>; // kg
   productInventory: Record<ProductId, number>; // kg（売却時にpc換算）
   staff: Staff;
   /** 在庫キャパ（kg）。 */
@@ -152,7 +154,8 @@ export interface GameState {
   log: string[];
 
   // ---- フェーズ別の一時状態 ----
-  purchaseBids: Record<number, Record<string, number>>;
+  /** purchaseフェーズ：プレイヤーID → (ロットID → {単価, 希望数量kg})。 */
+  purchaseBids: Record<number, Record<string, { price: number; qty: number }>>;
   bidsSubmitted: number[];
   openSale: OpenSale | null;
   passStreak: number;
@@ -174,13 +177,12 @@ export interface GameState {
   internalEvents?: Record<number, string>;
   /** 純資産の推移（開始時＋各決算）。values は playerId 順。 */
   history: { label: string; values: number[] }[];
-  /** セリ結果（auctionResultフェーズで発表）。 */
+  /** セリ結果（auctionResultフェーズで発表）。1ロットを複数社で分け合える。 */
   auctionResults: {
     speciesId: SpeciesId;
     kg: number; // 出品量
-    winnerId: number | null; // 落札者（null=不成立）
-    price: number; // 落札単価/kg
-    soldKg: number; // 実際に搬入された量
+    /** 落札の内訳（高単価順に割当）。空＝不成立。 */
+    allocations: { playerId: number; kg: number; price: number }[];
   }[];
   /** 直近の販売成立（ポップアップ表示用）。 */
   lastSaleResult: { seq: number; sellers: { playerId: number; amount: number }[] } | null;

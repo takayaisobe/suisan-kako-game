@@ -21,6 +21,7 @@ import {
   productName,
   rawList,
   speciesName,
+  thawedList,
   yen,
 } from "./format.ts";
 import { HandOff } from "./HandOff.tsx";
@@ -157,22 +158,17 @@ function TurnPanel({ dispatch, actor }: Props & { actor: Player }) {
 
 function FreezeThaw({ actor, dispatch }: { actor: Player; dispatch: (c: Command) => void }) {
   const raws = rawList(actor);
-  const frozen = frozenList(actor);
-  if (raws.length === 0 && frozen.length === 0) return null;
+  if (raws.length === 0) return null;
   return (
     <div style={{ marginTop: 12 }}>
-      <h3 className="small">冷凍 / 解凍（任意）</h3>
+      <h3 className="small">冷凍（任意・原魚を保存）</h3>
       <div className="row">
         {raws.map((r) => (
           <button key={"f" + r.id} className="ghost small" onClick={() => dispatch({ type: "freeze", playerId: actor.id, speciesId: r.id, kg: r.kg })}>
             {speciesName(r.id)}を冷凍({r.kg}kg)
           </button>
         ))}
-        {frozen.map((r) => (
-          <button key={"t" + r.id} className="ghost small" onClick={() => dispatch({ type: "thaw", playerId: actor.id, speciesId: r.id, kg: r.kg })}>
-            {speciesName(r.id)}を解凍({r.kg}kg)
-          </button>
-        ))}
+        <span className="muted small">※解凍は翌朝の「朝の準備」で行います</span>
       </div>
     </div>
   );
@@ -337,13 +333,20 @@ function PriceMeter({
 function InventoryView({ actor }: { actor: Player }) {
   const raws = rawList(actor);
   const frozen = frozenList(actor);
+  const thawed = thawedList(actor);
   const products = productList(actor);
   return (
     <div className="small muted">
       在庫 {inventoryUsed(actor)}/{actor.inventoryCapacity}kg・販売枠{salesCapacity(actor)}kg／
       原魚:{raws.map((r) => `${speciesName(r.id)}${r.kg}`).join(" ") || "なし"}／ 冷凍:
-      {frozen.map((r) => `${speciesName(r.id)}${r.kg}`).join(" ") || "なし"}／ 製品:
-      {products.map((r) => `${productName(r.id)}${r.kg}`).join(" ") || "なし"}
+      {frozen.map((r) => `${speciesName(r.id)}${r.kg}`).join(" ") || "なし"}
+      {thawed.length > 0 && (
+        <span className="neg">
+          {" "}
+          ／ 解凍中(本日加工):{thawed.map((r) => `${speciesName(r.id)}${r.kg}`).join(" ")}
+        </span>
+      )}
+      ／ 製品:{products.map((r) => `${productName(r.id)}${r.kg}`).join(" ") || "なし"}
     </div>
   );
 }

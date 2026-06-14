@@ -790,3 +790,12 @@ button {
   padding: 6px 12px;
   word-break: break-all;
 }
+
+/* ===== 朝の準備（セリ前） ===== */
+.prep {
+  background: #0e1822;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}

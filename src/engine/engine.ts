@@ -88,7 +88,7 @@ export function canActToday(p: Player): boolean {
 }
 export function inventoryUsed(p: Player): number {
   const sum = (r: Record<string, number>) => Object.values(r).reduce((a, b) => a + b, 0);
-  return sum(p.rawInventory) + sum(p.frozenInventory) + sum(p.productInventory);
+  return sum(p.rawInventory) + sum(p.frozenInventory) + sum(p.thawedInventory) + sum(p.productInventory);
 }
 export function inventoryLeft(p: Player): number {
   return Math.max(0, p.inventoryCapacity - inventoryUsed(p));
@@ -142,6 +142,7 @@ function makePlayer(id: number, name: string, isCpu: boolean): Player {
     cash: INITIAL_CAPITAL,
     rawInventory: {},
     frozenInventory: {},
+    thawedInventory: {},
     productInventory: {},
     staff: {
       sales: INITIAL_SALES_STAFF,
@@ -256,6 +257,12 @@ function beginTurn(state: GameState): GameState {
   state.superSold = {};
   state.ecSold = {};
   for (const p of state.players) {
+    // 前日に解凍したまま加工しなかった原魚は傷んで廃棄
+    const rotted = Object.values(p.thawedInventory).reduce((a, b) => a + b, 0);
+    if (rotted > 0) {
+      pushLog(state, `${p.name}：解凍したまま使わなかった原魚 ${rotted}kg が傷んで廃棄`);
+      p.thawedInventory = {};
+    }
     p.usedSalesKg = 0;
     p.turnDone = false;
     p.ready = false;
@@ -284,11 +291,12 @@ function rankingLine(state: GameState): string {
 export type Command =
   | { type: "proceedToPurchase" }
   | { type: "proceedToAction" }
-  | { type: "setBid"; playerId: number; lotId: string; pricePerKg: number }
+  | { type: "setBid"; playerId: number; lotId: string; pricePerKg: number; qtyKg: number }
   | { type: "submitBids"; playerId: number }
   | { type: "manufacture"; playerId: number; productId: string; kg: number }
   | { type: "freeze"; playerId: number; speciesId: string; kg: number }
   | { type: "thaw"; playerId: number; speciesId: string; kg: number }
+  | { type: "reassign"; playerId: number; dir: "toMfg" | "toSales" }
   | { type: "declareSell"; playerId: number }
   | { type: "addSaleItem"; playerId: number; item: SaleItem }
   | { type: "removeSaleItem"; playerId: number; index: number }
@@ -310,6 +318,10 @@ function addRaw(p: Player, speciesId: string, kg: number): void {
 function addFrozen(p: Player, speciesId: string, kg: number): void {
   p.frozenInventory[speciesId] = (p.frozenInventory[speciesId] ?? 0) + kg;
   if (p.frozenInventory[speciesId] <= 0) delete p.frozenInventory[speciesId];
+}
+function addThawed(p: Player, speciesId: string, kg: number): void {
+  p.thawedInventory[speciesId] = (p.thawedInventory[speciesId] ?? 0) + kg;
+  if (p.thawedInventory[speciesId] <= 0) delete p.thawedInventory[speciesId];
 }
 function addProduct(p: Player, productId: string, kg: number): void {
   p.productInventory[productId] = (p.productInventory[productId] ?? 0) + kg;
@@ -335,8 +347,8 @@ export function applyCommand(prev: GameState, command: Command): GameState {
     case "setBid": {
       if (state.phase !== "purchase") return prev;
       const bids = (state.purchaseBids[command.playerId] ??= {});
-      if (command.pricePerKg <= 0) delete bids[command.lotId];
-      else bids[command.lotId] = command.pricePerKg;
+      if (command.pricePerKg <= 0 || command.qtyKg <= 0) delete bids[command.lotId];
+      else bids[command.lotId] = { price: command.pricePerKg, qty: command.qtyKg };
       return state;
     }
 
@@ -367,13 +379,31 @@ export function applyCommand(prev: GameState, command: Command): GameState {
     }
 
     case "thaw": {
-      if (state.phase !== "action") return prev;
+      // 解凍は朝（セリ前）の準備。解凍した原魚はその日に加工しないと翌朝腐る。
+      if (state.phase !== "purchase") return prev;
       const p = state.players[command.playerId];
       const kg = Math.min(command.kg, p.frozenInventory[command.speciesId] ?? 0);
       if (kg <= 0) return prev;
       addFrozen(p, command.speciesId, -kg);
-      addRaw(p, command.speciesId, kg);
-      pushLog(state, `${p.name}：${speciesById(command.speciesId).name} ${kg}kgを解凍`);
+      addThawed(p, command.speciesId, kg);
+      pushLog(state, `${p.name}：${speciesById(command.speciesId).name} ${kg}kgを解凍（本日中に加工を）`);
+      return state;
+    }
+
+    case "reassign": {
+      // 配置転換も朝（セリ前）。営業↔製造を1人移動。
+      if (state.phase !== "purchase") return prev;
+      const p = state.players[command.playerId];
+      if (command.dir === "toMfg") {
+        if (p.staff.sales < 1) return prev;
+        p.staff.sales -= 1;
+        p.staff.manufacturing += 1;
+      } else {
+        if (p.staff.manufacturing < 1) return prev;
+        p.staff.manufacturing -= 1;
+        p.staff.sales += 1;
+      }
+      pushLog(state, `${p.name}：配置転換（${command.dir === "toMfg" ? "営業→製造" : "製造→営業"}）`);
       return state;
     }
 
@@ -453,36 +483,38 @@ export function applyCommand(prev: GameState, command: Command): GameState {
   }
 }
 
-// ---- セリの解決 ----
+// ---- セリの解決（単価＋数量。高単価から順に割当、1ロットを分け合える） ----
 function resolvePurchase(state: GameState): void {
   const results: GameState["auctionResults"] = [];
   for (const lot of state.market) {
-    const bids: { playerId: number; price: number }[] = [];
+    // 有効な入札（最低価格以上・数量>0）を集め、ランダムなタイブレーク値を付与
+    const bids: { playerId: number; price: number; qty: number; rnd: number }[] = [];
     for (const p of state.players) {
-      const price = state.purchaseBids[p.id]?.[lot.id];
-      if (price && price >= lot.minPrice) bids.push({ playerId: p.id, price });
+      const b = state.purchaseBids[p.id]?.[lot.id];
+      if (b && b.price >= lot.minPrice && b.qty > 0) {
+        const r = nextInt(state.rngState, 0, 1_000_000);
+        state.rngState = r.state;
+        bids.push({ playerId: p.id, price: b.price, qty: b.qty, rnd: r.value });
+      }
     }
-    if (bids.length === 0) {
-      results.push({ speciesId: lot.speciesId, kg: lot.kg, winnerId: null, price: 0, soldKg: 0 });
-      continue;
+    // 高単価優先、同値はランダム
+    bids.sort((a, b) => b.price - a.price || a.rnd - b.rnd);
+
+    let remaining = lot.kg;
+    const allocations: { playerId: number; kg: number; price: number }[] = [];
+    for (const bid of bids) {
+      if (remaining <= 0) break;
+      const p = state.players[bid.playerId];
+      const give = Math.min(remaining, bid.qty, inventoryLeft(p), Math.floor(p.cash / bid.price));
+      if (give <= 0) continue;
+      const cost = bid.price * give;
+      p.cash -= cost;
+      addRaw(p, lot.speciesId, give);
+      remaining -= give;
+      allocations.push({ playerId: bid.playerId, kg: give, price: bid.price });
+      pushLog(state, `${p.name}：${speciesById(lot.speciesId).name} ${give}kgを@${bid.price}で落札（-${cost}）`);
     }
-    const maxPrice = Math.max(...bids.map((b) => b.price));
-    const top = bids.filter((b) => b.price === maxPrice);
-    const r = nextInt(state.rngState, 0, top.length - 1);
-    state.rngState = r.state;
-    const winner = top[r.value];
-    const p = state.players[winner.playerId];
-    const buyKg = Math.min(lot.kg, inventoryLeft(p), Math.floor(p.cash / winner.price));
-    if (buyKg <= 0) {
-      results.push({ speciesId: lot.speciesId, kg: lot.kg, winnerId: winner.playerId, price: winner.price, soldKg: 0 });
-      pushLog(state, `${p.name}：${speciesById(lot.speciesId).name}を落札も在庫/資金不足で搬入できず`);
-      continue;
-    }
-    const cost = winner.price * buyKg;
-    p.cash -= cost;
-    addRaw(p, lot.speciesId, buyKg);
-    results.push({ speciesId: lot.speciesId, kg: lot.kg, winnerId: winner.playerId, price: winner.price, soldKg: buyKg });
-    pushLog(state, `${p.name}：${speciesById(lot.speciesId).name} ${buyKg}kgを@${winner.price}で落札（-${cost}）`);
+    results.push({ speciesId: lot.speciesId, kg: lot.kg, allocations });
   }
   state.auctionResults = results;
   state.market = [];
@@ -502,9 +534,14 @@ function doManufacture(state: GameState, playerId: number, productId: string, kg
   const p = state.players[playerId];
   if (playerId !== state.activePlayer || p.turnDone) return;
   const product = productById(productId);
-  const useKg = Math.min(kg, mfgDailyKg(p), p.rawInventory[product.speciesId] ?? 0);
+  const sp = product.speciesId;
+  const avail = (p.thawedInventory[sp] ?? 0) + (p.rawInventory[sp] ?? 0);
+  const useKg = Math.min(kg, mfgDailyKg(p), avail);
   if (useKg <= 0) return;
-  addRaw(p, product.speciesId, -useKg);
+  // 解凍した原魚から先に消費（使わないと腐るため）
+  const fromThawed = Math.min(useKg, p.thawedInventory[sp] ?? 0);
+  if (fromThawed > 0) addThawed(p, sp, -fromThawed);
+  if (useKg - fromThawed > 0) addRaw(p, sp, -(useKg - fromThawed));
   addProduct(p, productId, useKg);
   p.turnDone = true;
   pushLog(state, `${p.name}：${speciesById(product.speciesId).name}→${product.name} ${useKg}kgを製造（本日の操業終了）`);

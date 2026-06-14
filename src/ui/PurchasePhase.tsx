@@ -4,7 +4,7 @@ import {
   type Command,
   type GameState,
 } from "../engine/index.ts";
-import { speciesName, yen } from "./format.ts";
+import { frozenList, speciesName, yen } from "./format.ts";
 import { HandOff } from "./HandOff.tsx";
 import { useNet } from "./net-context.ts";
 
@@ -23,7 +23,7 @@ export function PurchasePhase({ state, dispatch }: Props) {
       : state.players[mySeat]
     : state.players.find((p) => !state.bidsSubmitted.includes(p.id));
   const [revealed, setRevealed] = useState(false);
-  const [bids, setBids] = useState<Record<string, number>>({});
+  const [bids, setBids] = useState<Record<string, { price: number; qty: number }>>({});
 
   useEffect(() => {
     setRevealed(false);
@@ -56,17 +56,58 @@ export function PurchasePhase({ state, dispatch }: Props) {
 
   const submit = () => {
     for (const lot of state.market) {
-      const v = bids[lot.id] ?? 0;
-      dispatch({ type: "setBid", playerId: bidder.id, lotId: lot.id, pricePerKg: v });
+      const b = bids[lot.id] ?? { price: 0, qty: 0 };
+      dispatch({ type: "setBid", playerId: bidder.id, lotId: lot.id, pricePerKg: b.price, qtyKg: b.qty });
     }
     dispatch({ type: "submitBids", playerId: bidder.id });
   };
 
+  const frozen = frozenList(bidder);
   return (
     <div className="card">
       <h2>朝のセリ — {bidder.name}</h2>
+
+      {/* 朝の準備：仕入れ前に配置転換と解凍 */}
+      <div className="prep">
+        <h3 className="small">朝の準備（仕入れ前）</h3>
+        <div className="row">
+          <span className="muted small">人員 営業{bidder.staff.sales}／製造{bidder.staff.manufacturing}：</span>
+          <button
+            className="ghost small"
+            disabled={bidder.staff.sales < 1}
+            onClick={() => dispatch({ type: "reassign", playerId: bidder.id, dir: "toMfg" })}
+          >
+            営業→製造
+          </button>
+          <button
+            className="ghost small"
+            disabled={bidder.staff.manufacturing < 1}
+            onClick={() => dispatch({ type: "reassign", playerId: bidder.id, dir: "toSales" })}
+          >
+            製造→営業
+          </button>
+        </div>
+        <div className="row" style={{ marginTop: 4 }}>
+          <span className="muted small">解凍（冷凍庫）：</span>
+          {frozen.length === 0 ? (
+            <span className="muted small">冷凍在庫なし</span>
+          ) : (
+            frozen.map((f) => (
+              <button
+                key={f.id}
+                className="ghost small"
+                onClick={() => dispatch({ type: "thaw", playerId: bidder.id, speciesId: f.id, kg: f.kg })}
+              >
+                {speciesName(f.id)}を解凍({f.kg}kg)
+              </button>
+            ))
+          )}
+          <span className="muted small">※解凍した魚は本日中に加工しないと腐ります</span>
+        </div>
+      </div>
+
       <p className="muted small">
-        各ロットに kgあたりの入札額を入れます（最低価格以上で最高額が落札）。在庫の空き：
+        各ロットに「単価/kg」と「欲しい数量kg」を入れます。**高い単価から順に数量を割り当て**るので、1つの魚を複数社で分け合えます。在庫の空き：
         {inventoryLeft(bidder)}kg / 現金 {yen(bidder.cash)}
       </p>
       {state.market.length === 0 ? (
@@ -76,16 +117,19 @@ export function PurchasePhase({ state, dispatch }: Props) {
           <thead>
             <tr>
               <th>魚種</th>
-              <th>数量</th>
+              <th>水揚げ</th>
               <th>最低/kg</th>
               <th>相場上限/kg</th>
               <th>入札/kg</th>
+              <th>欲しいkg</th>
               <th>支払見込</th>
             </tr>
           </thead>
           <tbody>
             {state.market.map((lot) => {
-              const bid = bids[lot.id] ?? 0;
+              const bid = bids[lot.id] ?? { price: 0, qty: 0 };
+              const set = (patch: Partial<{ price: number; qty: number }>) =>
+                setBids({ ...bids, [lot.id]: { ...bid, ...patch } });
               return (
                 <tr key={lot.id}>
                   <td>{speciesName(lot.speciesId)}</td>
@@ -96,14 +140,22 @@ export function PurchasePhase({ state, dispatch }: Props) {
                     <input
                       type="number"
                       min={0}
-                      value={bid || ""}
+                      value={bid.price || ""}
                       placeholder="0"
-                      onChange={(e) =>
-                        setBids({ ...bids, [lot.id]: Number(e.target.value) })
-                      }
+                      onChange={(e) => set({ price: Number(e.target.value) })}
                     />
                   </td>
-                  <td className="muted">{bid > 0 ? yen(bid * lot.kg) : "—"}</td>
+                  <td>
+                    <input
+                      type="number"
+                      min={0}
+                      max={lot.kg}
+                      value={bid.qty || ""}
+                      placeholder="0"
+                      onChange={(e) => set({ qty: Math.min(lot.kg, Number(e.target.value)) })}
+                    />
+                  </td>
+                  <td className="muted">{bid.price > 0 && bid.qty > 0 ? yen(bid.price * bid.qty) : "—"}</td>
                 </tr>
               );
             })}
@@ -115,7 +167,7 @@ export function PurchasePhase({ state, dispatch }: Props) {
           入札を確定して次へ
         </button>
         <span className="muted small">
-          ※ 0のままなら入札なし。落札しても在庫が足りなければ入る分だけ。
+          ※ 単価か数量が0なら入札なし。落札しても在庫・資金が足りなければ入る分だけ。
         </span>
       </div>
     </div>

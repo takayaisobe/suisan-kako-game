@@ -68,12 +68,11 @@ function planBids(state: GameState, p: Player): Command[] {
   for (const lot of lots) {
     if (space <= 0 || budget <= lot.minPrice) continue;
     const sp = speciesById(lot.speciesId);
-    const maxPay = Math.max(lot.minPrice, Math.round(sp.rawSellPrice * aggression));
-    const wantKg = Math.min(lot.kg, space);
-    const affordable = Math.floor(budget / Math.max(1, wantKg));
-    const bid = Math.min(maxPay, affordable);
-    if (bid < lot.minPrice) continue;
-    cmds.push({ type: "setBid", playerId: p.id, lotId: lot.id, pricePerKg: bid });
+    const bid = Math.max(lot.minPrice, Math.round(sp.rawSellPrice * aggression));
+    // 単価bidで、予算と在庫の範囲で買いたい数量
+    const wantKg = Math.min(lot.kg, space, Math.floor(budget / bid));
+    if (wantKg <= 0) continue;
+    cmds.push({ type: "setBid", playerId: p.id, lotId: lot.id, pricePerKg: bid, qtyKg: wantKg });
     budget -= bid * wantKg;
     space -= wantKg;
   }

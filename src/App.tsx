@@ -834,11 +834,11 @@ function WeatherView({ state, dispatch }: { state: GameState; dispatch: (c: Comm
 
 function AuctionResultView({ state, dispatch }: { state: GameState; dispatch: (c: Command) => void }) {
   const results = state.auctionResults;
-  const won = results.filter((r) => r.winnerId !== null && r.soldKg > 0);
+  const dealCount = results.reduce((a, r) => a + r.allocations.length, 0);
   return (
     <div className="card auction-reveal">
       <h2>🔨 セリ結果発表</h2>
-      <p className="muted small">本日の落札結果です。</p>
+      <p className="muted small">本日の落札結果です（高単価から数量を割当）。</p>
       {results.length === 0 ? (
         <p className="neg">本日は水揚げがありませんでした。</p>
       ) : (
@@ -846,39 +846,43 @@ function AuctionResultView({ state, dispatch }: { state: GameState; dispatch: (c
           <thead>
             <tr>
               <th>魚種</th>
-              <th>出品</th>
-              <th>落札</th>
-              <th>単価/kg</th>
-              <th>搬入</th>
+              <th>水揚げ</th>
+              <th>落札内訳（社・数量・単価）</th>
             </tr>
           </thead>
           <tbody>
-            {results.map((r, i) => (
-              <tr key={i} className="reveal-row" style={{ animationDelay: `${i * 0.12}s` }}>
-                <td>{speciesName(r.speciesId)}</td>
-                <td>{r.kg}kg</td>
-                <td>
-                  {r.winnerId === null ? (
-                    <span className="muted">不成立（入札なし）</span>
-                  ) : (
-                    <span>
-                      <span className="dot" style={{ background: PLAYER_COLORS[r.winnerId % PLAYER_COLORS.length] }} />
-                      {state.players[r.winnerId].name}
-                    </span>
-                  )}
-                </td>
-                <td>{r.winnerId === null ? "—" : yen(r.price)}</td>
-                <td className={r.winnerId !== null && r.soldKg === 0 ? "neg" : ""}>
-                  {r.winnerId === null ? "—" : `${r.soldKg}kg`}
-                </td>
-              </tr>
-            ))}
+            {results.map((r, i) => {
+              const soldKg = r.allocations.reduce((a, x) => a + x.kg, 0);
+              return (
+                <tr key={i} className="reveal-row" style={{ animationDelay: `${i * 0.12}s` }}>
+                  <td>{speciesName(r.speciesId)}</td>
+                  <td>
+                    {r.kg}kg
+                    {soldKg < r.kg && <span className="muted small">（{r.kg - soldKg}売れ残り）</span>}
+                  </td>
+                  <td>
+                    {r.allocations.length === 0 ? (
+                      <span className="muted">不成立（入札なし）</span>
+                    ) : (
+                      <div className="row" style={{ gap: 10 }}>
+                        {r.allocations.map((a, j) => (
+                          <span key={j}>
+                            <span className="dot" style={{ background: PLAYER_COLORS[a.playerId % PLAYER_COLORS.length] }} />
+                            {state.players[a.playerId].name} <b>{a.kg}kg</b> @{yen(a.price)}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}
       <div style={{ marginTop: 14 }}>
         <button className="primary" onClick={() => dispatch({ type: "proceedToAction" })}>
-          操業へ進む（{won.length}件 落札）
+          操業へ進む（{dealCount}件 落札）
         </button>
       </div>
     </div>

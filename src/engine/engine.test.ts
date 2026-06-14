@@ -4,7 +4,6 @@ import {
   applyCommand,
   createGame,
   currentActorId,
-  inventoryUsed,
   netWorth,
   salesCapacity,
   type Command,
@@ -37,35 +36,40 @@ describe("createGame", () => {
   });
 });
 
-describe("purchase auction", () => {
-  it("高値入札者が落札し、現金と在庫が動く", () => {
+describe("purchase auction（単価＋数量）", () => {
+  it("高単価から数量を割当。数量指定が尊重され、残りは次点へ", () => {
     let g = createGame(["A", "B"], 7);
     g = applyCommand(g, { type: "proceedToPurchase" });
     const lot = g.market.find((l) => l.speciesId === "madai")!;
     g = run(g, [
-      { type: "setBid", playerId: 0, lotId: lot.id, pricePerKg: lot.minPrice + 50 },
-      { type: "setBid", playerId: 1, lotId: lot.id, pricePerKg: lot.minPrice },
+      // A：高単価だが5kgだけ欲しい
+      { type: "setBid", playerId: 0, lotId: lot.id, pricePerKg: lot.minPrice + 50, qtyKg: 5 },
+      // B：最低価格で全量欲しい
+      { type: "setBid", playerId: 1, lotId: lot.id, pricePerKg: lot.minPrice, qtyKg: lot.kg },
       { type: "submitBids", playerId: 0 },
       { type: "submitBids", playerId: 1 },
     ]);
-    // セリ結果の発表フェーズを挟む
     expect(g.phase).toBe("auctionResult");
-    expect(g.auctionResults.find((r) => r.speciesId === "madai")?.winnerId).toBe(0);
+    const res = g.auctionResults.find((r) => r.speciesId === "madai")!;
+    const a0 = res.allocations.find((a) => a.playerId === 0);
+    const a1 = res.allocations.find((a) => a.playerId === 1);
+    expect(a0?.kg).toBe(5); // 数量指定どおり5kgだけ
+    expect(a0?.price).toBe(lot.minPrice + 50);
+    expect(g.players[0].rawInventory["madai"]).toBe(5);
+    // 残り（lot.kg-5）はBが取得（在庫/資金の範囲）
+    expect((a1?.kg ?? 0)).toBeGreaterThan(0);
     g = applyCommand(g, { type: "proceedToAction" });
     expect(g.phase).toBe("action");
-    expect(inventoryUsed(g.players[0])).toBeGreaterThan(0);
-    expect(g.players[0].cash).toBeLessThan(10000);
-    expect(g.players[1].cash).toBe(10000);
   });
 });
 
-// 仕入れ済みの action フェーズまで進める（全員空入札、player0だけ落札）
+// 仕入れ済みの action フェーズまで進める（player0が madai を最低価格で確保）
 function buyAndReachAction(seed: number): GameState {
   let g = createGame(["A", "B"], seed);
   g = applyCommand(g, { type: "proceedToPurchase" });
   const lot = g.market.find((l) => l.speciesId === "madai")!;
   g = run(g, [
-    { type: "setBid", playerId: 0, lotId: lot.id, pricePerKg: lot.minPrice },
+    { type: "setBid", playerId: 0, lotId: lot.id, pricePerKg: lot.minPrice, qtyKg: lot.kg },
     { type: "submitBids", playerId: 0 },
     { type: "submitBids", playerId: 1 },
   ]);
@@ -156,6 +160,68 @@ describe("1日1アクション制", () => {
     ]);
     // 製造で行動済みだった A が、相乗りで原魚を売って現金が増えた＝相乗りはアクション非消費
     expect(g.players[0].cash).toBeGreaterThan(cashBefore);
+  });
+});
+
+describe("配置転換", () => {
+  it("セリ前に営業↔製造を移せる／0未満にはできない", () => {
+    let g = createGame(["A", "B"], 7);
+    g = applyCommand(g, { type: "proceedToPurchase" });
+    expect(g.players[0].staff.sales).toBe(1);
+    expect(g.players[0].staff.manufacturing).toBe(1);
+    g = applyCommand(g, { type: "reassign", playerId: 0, dir: "toMfg" });
+    expect(g.players[0].staff.sales).toBe(0);
+    expect(g.players[0].staff.manufacturing).toBe(2);
+    // 営業0からはこれ以上 toMfg できない
+    g = applyCommand(g, { type: "reassign", playerId: 0, dir: "toMfg" });
+    expect(g.players[0].staff.sales).toBe(0);
+  });
+});
+
+// A が冷凍マダイを持った状態で「翌日のセリ」まで進める
+function day2PurchaseWithFrozenMadai(): { g: GameState; kg: number } {
+  let g = buyAndReachAction(7);
+  const kg = g.players[0].rawInventory["madai"] ?? 0;
+  g = applyCommand(g, { type: "freeze", playerId: 0, speciesId: "madai", kg });
+  g = applyCommand(g, { type: "pass", playerId: 0 });
+  g = applyCommand(g, { type: "pass", playerId: 1 });
+  g = applyCommand(g, { type: "proceedToPurchase" }); // 翌日のセリ
+  return { g, kg };
+}
+
+describe("解凍と腐敗", () => {
+  it("解凍はセリ前に行い、冷凍庫→解凍在庫へ移る", () => {
+    const { g: g0, kg } = day2PurchaseWithFrozenMadai();
+    expect(kg).toBeGreaterThan(0);
+    const g = applyCommand(g0, { type: "thaw", playerId: 0, speciesId: "madai", kg });
+    expect(g.players[0].thawedInventory["madai"]).toBe(kg);
+    expect(g.players[0].frozenInventory["madai"] ?? 0).toBe(0);
+  });
+
+  it("解凍した原魚を使わないと翌朝腐って消える", () => {
+    const { g: g0, kg } = day2PurchaseWithFrozenMadai();
+    let g = applyCommand(g0, { type: "thaw", playerId: 0, speciesId: "madai", kg });
+    g = applyCommand(g, { type: "submitBids", playerId: 0 });
+    g = applyCommand(g, { type: "submitBids", playerId: 1 });
+    g = applyCommand(g, { type: "proceedToAction" });
+    expect(g.players[0].thawedInventory["madai"]).toBe(kg); // まだ残っている
+    // 加工せずに1日を終える
+    g = applyCommand(g, { type: "pass", playerId: 0 });
+    g = applyCommand(g, { type: "pass", playerId: 1 });
+    // 翌朝：腐って消える
+    expect(g.players[0].thawedInventory["madai"] ?? 0).toBe(0);
+  });
+
+  it("解凍した原魚は製造で優先的に消費される", () => {
+    const { g: g0, kg } = day2PurchaseWithFrozenMadai();
+    let g = applyCommand(g0, { type: "thaw", playerId: 0, speciesId: "madai", kg });
+    g = applyCommand(g, { type: "submitBids", playerId: 0 });
+    g = applyCommand(g, { type: "submitBids", playerId: 1 });
+    g = applyCommand(g, { type: "proceedToAction" });
+    const useKg = Math.min(kg, 5);
+    g = applyCommand(g, { type: "manufacture", playerId: 0, productId: "madai_kirimi", kg: useKg });
+    expect(g.players[0].productInventory["madai_kirimi"]).toBe(useKg);
+    expect(g.players[0].thawedInventory["madai"] ?? 0).toBe(kg - useKg);
   });
 });
 
