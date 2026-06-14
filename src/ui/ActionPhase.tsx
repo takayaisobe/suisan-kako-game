@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  canMakeProduct,
   canUseEc,
   inventoryUsed,
   mfgDailyKg,
@@ -80,13 +81,16 @@ export function ActionPhase({ state, dispatch }: Props) {
 }
 
 // ---- 通常の手番 ----
+function availForMfg(actor: Player, speciesId: string): number {
+  return (actor.thawedInventory[speciesId] ?? 0) + (actor.rawInventory[speciesId] ?? 0);
+}
+
 function TurnPanel({ dispatch, actor }: Props & { actor: Player }) {
-  const eligible = ALL_PRODUCTS.filter((pr) => (actor.rawInventory[pr.speciesId] ?? 0) > 0);
+  const eligible = ALL_PRODUCTS.filter((pr) => canMakeProduct(actor, pr) && availForMfg(actor, pr.speciesId) > 0);
+  const locked = ALL_PRODUCTS.filter((pr) => !canMakeProduct(actor, pr));
   const [prodId, setProdId] = useState(eligible[0]?.id ?? "");
   const selected = prodId ? productById(prodId) : undefined;
-  const maxMfgKg = selected
-    ? Math.min(mfgDailyKg(actor), actor.rawInventory[selected.speciesId] ?? 0)
-    : 0;
+  const maxMfgKg = selected ? Math.min(mfgDailyKg(actor), availForMfg(actor, selected.speciesId)) : 0;
   const [mfgKg, setMfgKg] = useState(maxMfgKg);
   useEffect(() => setMfgKg(maxMfgKg), [maxMfgKg]);
 
@@ -105,8 +109,13 @@ function TurnPanel({ dispatch, actor }: Props & { actor: Player }) {
       <InventoryView actor={actor} />
 
       <h3 style={{ marginTop: 14 }}>製造する（自分だけ・他社は割り込めない）</h3>
+      {locked.length > 0 && (
+        <p className="muted small">
+          🔒 商品開発が必要：{locked.map((pr) => productName(pr.id)).join("・")}（決算後の投資フェーズで開発）
+        </p>
+      )}
       {eligible.length === 0 ? (
-        <p className="muted small">原魚がありません。先にセリで仕入れましょう。</p>
+        <p className="muted small">作れる製品がありません（原魚を仕入れる／商品開発で解禁）。</p>
       ) : (
         <div className="row">
           <select value={prodId} onChange={(e) => setProdId(e.target.value)}>

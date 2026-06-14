@@ -180,7 +180,7 @@ export function App() {
     setMySeat(0);
     setRoomCode(code);
   }
-  function startHosted(seed: number): void {
+  function startHosted(seed: number, hostLoan: number): void {
     if (!net || !net.isHost) return;
     const host = net as HostController;
     host.seats = host.seats.map((s) =>
@@ -188,7 +188,8 @@ export function App() {
     );
     const names = host.seats.map((s) => s.name);
     const cpu = host.seats.map((s) => s.kind === "cpu");
-    host.startGame(createGame(names, seed, cpu));
+    const loans = host.seats.map((_, i) => (i === 0 ? hostLoan : 0)); // 開業借入はホスト席のみ
+    host.startGame(createGame(names, seed, cpu, loans));
     setSeats([...host.seats]);
   }
   // ゲスト：部屋に参加
@@ -240,7 +241,7 @@ export function App() {
   if (screen === "offline")
     return (
       <Setup
-        onStart={(names, seed, cpu) => setGame(createGame(names, seed, cpu))}
+        onStart={(names, seed, cpu, loans) => setGame(createGame(names, seed, cpu, loans))}
         onShowRules={() => setShowRules(true)}
         rulesOpen={showRules}
         onCloseRules={() => setShowRules(false)}
@@ -356,12 +357,13 @@ function HostLobby({
   seats: SeatInfo[];
   roomCode: string;
   onCreate: (cfg: { names: string[]; cpu: boolean[] }) => Promise<void>;
-  onStart: (seed: number) => void;
+  onStart: (seed: number, hostLoan: number) => void;
   onBack: () => void;
 }) {
   const [count, setCount] = useState(2);
   const [names, setNames] = useState<string[]>(["フィッシャー水産", "うみの株式会社", "浜辺フーズ", "大洋商会", "潮田水産", "港工房"]);
   const [cpu, setCpu] = useState<boolean[]>([false, false, false, false, false, false]);
+  const [hostLoan, setHostLoan] = useState(0);
   const [seed] = useState(() => Math.floor(Math.random() * 1000000));
   const [status, setStatus] = useState<"idle" | "creating" | "error">("idle");
   const [err, setErr] = useState("");
@@ -429,6 +431,12 @@ function HostLobby({
             </div>
           ))}
           <p className="muted small">「オンライン枠」は他の人がコードで参加します（開始時に空席ならCPUに）。</p>
+          <h3 style={{ marginTop: 14 }}>あなたの開業借入</h3>
+          <select value={hostLoan} onChange={(e) => setHostLoan(Number(e.target.value))}>
+            <option value={0}>借入なし</option>
+            <option value={10000}>+1万（利率3%/期）</option>
+            <option value={20000}>+2万（利率3%/期）</option>
+          </select>
           <div style={{ marginTop: 14 }}>
             <button className="primary" onClick={create} disabled={status === "creating"}>
               {status === "creating" ? "部屋を作成中…" : "部屋を作る"}
@@ -462,7 +470,7 @@ function HostLobby({
         <h3 style={{ marginTop: 14 }}>参加状況</h3>
         <SeatList seats={seats} mySeat={0} />
         <div style={{ marginTop: 14 }}>
-          <button className="primary" onClick={() => onStart(seed)}>
+          <button className="primary" onClick={() => onStart(seed, hostLoan)}>
             ゲーム開始{waiting > 0 ? `（空席${waiting}はCPU）` : ""}
           </button>
         </div>
@@ -605,7 +613,7 @@ function Setup({
   onCloseRules,
   onBack,
 }: {
-  onStart: (names: string[], seed: number, cpu: boolean[]) => void;
+  onStart: (names: string[], seed: number, cpu: boolean[], loans: number[]) => void;
   onShowRules: () => void;
   rulesOpen: boolean;
   onCloseRules: () => void;
@@ -614,6 +622,7 @@ function Setup({
   const [count, setCount] = useState(3);
   const [names, setNames] = useState<string[]>(["フィッシャー水産", "うみの株式会社", "浜辺フーズ", "大洋商会", "潮田水産", "港工房"]);
   const [cpu, setCpu] = useState<boolean[]>([false, true, true, true, true, true]);
+  const [loans, setLoans] = useState<number[]>([0, 0, 0, 0, 0, 0]);
   // 毎回ちがう展開になるよう、初期シードはランダム（手入力で固定も可）
   const [seed, setSeed] = useState(() => Math.floor(Math.random() * 1000000));
 
@@ -670,9 +679,24 @@ function Setup({
             >
               {cpu[i] ? "🤖 CPU" : "🙂 人間"}
             </button>
+            <select
+              value={loans[i]}
+              title="開業借入（最大2万・利率3%/期・4決算で返済）"
+              onChange={(e) => {
+                const next = [...loans];
+                next[i] = Number(e.target.value);
+                setLoans(next);
+              }}
+            >
+              <option value={0}>借入なし</option>
+              <option value={10000}>開業借入 +1万</option>
+              <option value={20000}>開業借入 +2万</option>
+            </select>
           </div>
         ))}
-        <p className="muted small">「人間」ボタンを押すとCPU↔人間を切り替え。1人でCPUと対戦できます。</p>
+        <p className="muted small">
+          「人間」ボタンでCPU↔人間を切替。開業借入は資本金の最大2倍まで（利率3%/期・4決算で一括返済）。
+        </p>
         <h3 style={{ marginTop: 14 }}>シード（天候・市場・カードの乱数）</h3>
         <div className="row">
           <input type="number" value={seed} onChange={(e) => setSeed(Number(e.target.value))} />
@@ -684,7 +708,10 @@ function Setup({
           毎回ランダムに変わります。同じ値を入れれば同じ展開を再現できます（対戦・検証用）。
         </p>
         <div style={{ marginTop: 16 }}>
-          <button className="primary" onClick={() => onStart(names.slice(0, count), seed, cpu.slice(0, count))}>
+          <button
+            className="primary"
+            onClick={() => onStart(names.slice(0, count), seed, cpu.slice(0, count), loans.slice(0, count))}
+          >
             ゲーム開始
           </button>
         </div>

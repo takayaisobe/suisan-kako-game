@@ -2,13 +2,17 @@ import { useEffect, useState } from "react";
 import {
   INVESTMENT_OPTIONS,
   LOAN_OPTIONS,
+  PRODUCT_DEV_COST,
+  PRODUCTS,
   type Command,
   type GameState,
 } from "../engine/index.ts";
-import { yen } from "./format.ts";
+import { productName, yen } from "./format.ts";
 import { HandOff } from "./HandOff.tsx";
 import { useNet } from "./net-context.ts";
 import { WaitingPanel } from "./WaitingPanel.tsx";
+
+const STRONG_PRODUCTS = PRODUCTS.filter((p) => p.category === "strong");
 
 interface Props {
   state: GameState;
@@ -66,6 +70,35 @@ export function InvestmentPhase({ state, dispatch }: Props) {
                     onClick={() => dispatch({ type: "invest", playerId: investor.id, kind: opt.kind })}
                   >
                     {owned ? "取得済" : "投資"}
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+
+      <h3 style={{ marginTop: 14 }}>商品開発（加工品強を解禁）</h3>
+      <table>
+        <tbody>
+          {STRONG_PRODUCTS.map((pr) => {
+            const done = investor.developedProducts.includes(pr.id);
+            return (
+              <tr key={pr.id}>
+                <td>
+                  <strong>{productName(pr.id)}</strong>
+                  <br />
+                  <span className="muted small">
+                    開発すると製造可能（{yen(pr.priceMin)}〜{yen(pr.priceMax)}/pc）
+                  </span>
+                </td>
+                <td>{yen(PRODUCT_DEV_COST)}</td>
+                <td>
+                  <button
+                    disabled={done || investor.cash < PRODUCT_DEV_COST}
+                    onClick={() => dispatch({ type: "develop", playerId: investor.id, productId: pr.id })}
+                  >
+                    {done ? "開発済" : "開発"}
                   </button>
                 </td>
               </tr>

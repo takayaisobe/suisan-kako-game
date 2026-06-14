@@ -22,11 +22,15 @@ import {
   MFG_KG_PER_PRODUCT,
   MFG_KG_PER_PRODUCT_TRAINED,
   PRODUCTS,
+  PRODUCT_DEV_COST,
   SALES_KG_PER_STAFF,
   SALES_KG_PER_STAFF_TRAINED,
   SEASONS,
   SEASON_LABEL,
   SPECIES,
+  STARTUP_LOAN_MAX,
+  STARTUP_LOAN_RATE,
+  STARTUP_LOAN_TERM,
   STORM_LABEL,
   STORM_PROB,
   TOTAL_TURNS,
@@ -104,6 +108,12 @@ export function netWorth(p: Player): number {
   return p.cash - debt;
 }
 
+/** その製品を製造できるか（加工品強は商品開発が必要）。 */
+export function canMakeProduct(p: Player, product: Product): boolean {
+  if (product.category === "strong") return p.developedProducts.includes(product.id);
+  return true;
+}
+
 /** EC・輸出販路を使えるか（HACCP以上が必要）。 */
 export function canUseEc(p: Player): boolean {
   return p.certifications.includes(EC_REQUIRES_CERT);
@@ -160,6 +170,7 @@ function makePlayer(id: number, name: string, isCpu: boolean): Player {
     inventoryCapacity: INITIAL_INVENTORY_CAPACITY,
     mfgLines: 0,
     certifications: [],
+    developedProducts: [],
     loans: [],
     usedSalesKg: 0,
     turnDone: false,
@@ -173,6 +184,7 @@ export function createGame(
   playerNames: string[],
   seed = 12345,
   cpuFlags: boolean[] = [],
+  startupLoans: number[] = [],
 ): GameState {
   const base: GameState = {
     turn: 0,
@@ -200,6 +212,15 @@ export function createGame(
     lastSaleResult: null,
     saleResultSeq: 0,
   };
+  // 開業借入（最大 資本金の2倍）。長期ローンとして計上。
+  base.players.forEach((p, i) => {
+    const amt = Math.max(0, Math.min(STARTUP_LOAN_MAX, Math.round(startupLoans[i] ?? 0)));
+    if (amt > 0) {
+      p.cash += amt;
+      p.loans.push({ principal: amt, rate: STARTUP_LOAN_RATE, termRemaining: STARTUP_LOAN_TERM, kind: "long" });
+      base.log = [`${p.name}：開業借入 +${amt}`, ...base.log];
+    }
+  });
   return beginTurn(base);
 }
 
@@ -320,6 +341,7 @@ export type Command =
   | { type: "pass"; playerId: number }
   | { type: "proceedToInvestment" }
   | { type: "invest"; playerId: number; kind: InvestmentKind }
+  | { type: "develop"; playerId: number; productId: string }
   | { type: "takeLoan"; playerId: number; kind: "short" | "long" }
   | { type: "finishInvestment"; playerId: number };
 
@@ -481,6 +503,19 @@ export function applyCommand(prev: GameState, command: Command): GameState {
       return state;
     }
 
+    case "develop": {
+      if (state.phase !== "investment") return prev;
+      const p = state.players[command.playerId];
+      const product = productById(command.productId);
+      if (product.category !== "strong") return prev;
+      if (p.developedProducts.includes(product.id)) return prev;
+      if (p.cash < PRODUCT_DEV_COST) return prev;
+      p.cash -= PRODUCT_DEV_COST;
+      p.developedProducts.push(product.id);
+      pushLog(state, `${p.name}：商品開発「${product.name}」（-${PRODUCT_DEV_COST}）`);
+      return state;
+    }
+
     case "takeLoan": {
       if (state.phase !== "investment") return prev;
       const p = state.players[command.playerId];
@@ -554,6 +589,7 @@ function doManufacture(state: GameState, playerId: number, productId: string, kg
   const p = state.players[playerId];
   if (playerId !== state.activePlayer || p.turnDone) return;
   const product = productById(productId);
+  if (!canMakeProduct(p, product)) return; // 加工品強は商品開発が必要
   const sp = product.speciesId;
   const avail = (p.thawedInventory[sp] ?? 0) + (p.rawInventory[sp] ?? 0);
   const useKg = Math.min(kg, mfgDailyKg(p), avail);

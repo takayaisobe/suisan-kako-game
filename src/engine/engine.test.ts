@@ -256,6 +256,74 @@ describe("解凍と腐敗", () => {
   });
 });
 
+// 最初の投資フェーズ（第5期決算後）まで全パスで進める
+function toFirstInvestment(): GameState {
+  let g = createGame(["A", "B"], 42);
+  let guard = 0;
+  while (g.phase !== "investment" && guard++ < 300) {
+    switch (g.phase) {
+      case "weather":
+        g = applyCommand(g, { type: "proceedToPurchase" });
+        break;
+      case "purchase":
+        for (const p of g.players) g = applyCommand(g, { type: "submitBids", playerId: p.id });
+        break;
+      case "auctionResult":
+        g = applyCommand(g, { type: "proceedToAction" });
+        break;
+      case "action":
+        g = applyCommand(g, { type: "pass", playerId: g.activePlayer });
+        break;
+      case "settlement":
+        g = applyCommand(g, { type: "proceedToInvestment" });
+        break;
+    }
+  }
+  return g;
+}
+
+describe("商品開発（加工品強の解禁）", () => {
+  it("未開発の加工品強は作れない／加工品弱は作れる", () => {
+    const g = buyAndReachAction(7); // A はマダイ原魚を保有
+    // 加工品強（茶漬け）は未開発 → 作れない
+    const g1 = applyCommand(g, { type: "manufacture", playerId: 0, productId: "madai_chazuke", kg: 5 });
+    expect(g1.players[0].productInventory["madai_chazuke"] ?? 0).toBe(0);
+    expect(g1.players[0].turnDone).toBe(false);
+    // 加工品弱（切身）は作れる
+    const g2 = applyCommand(g, { type: "manufacture", playerId: 0, productId: "madai_kirimi", kg: 5 });
+    expect(g2.players[0].productInventory["madai_kirimi"]).toBe(5);
+  });
+
+  it("投資フェーズで3000払って開発すると作れるようになる", () => {
+    let g = toFirstInvestment();
+    expect(g.phase).toBe("investment");
+    const cashBefore = g.players[0].cash;
+    g = applyCommand(g, { type: "develop", playerId: 0, productId: "madai_chazuke" });
+    expect(g.players[0].developedProducts).toContain("madai_chazuke");
+    expect(g.players[0].cash).toBe(cashBefore - 3000);
+    // 同じものは二重開発できない
+    g = applyCommand(g, { type: "develop", playerId: 0, productId: "madai_chazuke" });
+    expect(g.players[0].cash).toBe(cashBefore - 3000);
+  });
+});
+
+describe("開業借入", () => {
+  it("開始時に借入でき、現金が増えローンが計上される", () => {
+    const g = createGame(["A", "B"], 7, [false, false], [20000, 0]);
+    expect(g.players[0].cash).toBe(10000 + 20000);
+    expect(g.players[0].loans).toHaveLength(1);
+    expect(g.players[0].loans[0].principal).toBe(20000);
+    expect(g.players[1].cash).toBe(10000); // 借入なし
+    expect(g.players[1].loans).toHaveLength(0);
+  });
+
+  it("資本金の2倍を超える借入は上限に丸められる", () => {
+    const g = createGame(["A"], 7, [false], [99999]);
+    expect(g.players[0].loans[0].principal).toBe(20000);
+    expect(g.players[0].cash).toBe(10000 + 20000);
+  });
+});
+
 describe("EC輸出は認証が必要", () => {
   it("HACCPなしではEC販売できない", () => {
     let g = buyAndReachAction(7);

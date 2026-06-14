@@ -4,8 +4,9 @@
 //   aiActions(state) … そのプレイヤーがCPUのとき実行すべきCommand列
 // =====================================================================
 
-import { INVESTMENT_OPTIONS, PRODUCTS, type InvestmentKind } from "./data.ts";
+import { INVESTMENT_OPTIONS, PRODUCT_DEV_COST, PRODUCTS, type InvestmentKind } from "./data.ts";
 import {
+  canMakeProduct,
   canUseEc,
   inventoryLeft,
   inventoryUsed,
@@ -125,9 +126,11 @@ function planTurn(state: GameState, p: Player): Command[] {
     return [...freezeLeftoverRaw(p, null, 0), { type: "declareSell", playerId: p.id }];
   }
 
-  // 原魚（生＋解凍済み）があれば、その日の製造枠ぶん加工
+  // 原魚（生＋解凍済み）があり、作れる製品（加工品強は開発済みのみ）
   const candidates = PRODUCTS.filter(
-    (pr) => (p.rawInventory[pr.speciesId] ?? 0) + (p.thawedInventory[pr.speciesId] ?? 0) > 0,
+    (pr) =>
+      canMakeProduct(p, pr) &&
+      (p.rawInventory[pr.speciesId] ?? 0) + (p.thawedInventory[pr.speciesId] ?? 0) > 0,
   );
   if (candidates.length) {
     candidates.sort((a, b) => b.priceMax - a.priceMax);
@@ -210,6 +213,16 @@ function planInvest(p: Player): Command[] {
       cash -= opt.cost;
     }
   }
+
+  // 商品開発：高付加価値の加工品強を1つ解禁（資金に余裕があれば）
+  const toDevelop = PRODUCTS.filter((pr) => pr.category === "strong" && !p.developedProducts.includes(pr.id)).sort(
+    (a, b) => b.priceMax - a.priceMax,
+  )[0];
+  if (toDevelop && cash - PRODUCT_DEV_COST >= buffer) {
+    cmds.push({ type: "develop", playerId: p.id, productId: toDevelop.id });
+    cash -= PRODUCT_DEV_COST;
+  }
+
   cmds.push({ type: "finishInvestment", playerId: p.id });
   return cmds;
 }

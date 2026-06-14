@@ -163,6 +163,15 @@ export const LOAN_OPTIONS = {
   long: { amount: 15000, rate: 0.03, term: 4, label: "長期借入 +15000（利率3%/期・4期で返済）" },
 };
 
+// 商品開発：加工品強（茶漬け/たたき/味噌煮/白子）は開発しないと作れない。
+export const PRODUCT_DEV_COST = 3000;
+
+// 開業借入：開始時に最大「資本金の2倍」まで（長期・4決算で返済）。
+export const STARTUP_LOAN_MAX = INITIAL_CAPITAL * 2; // 20000
+export const STARTUP_LOAN_RATE = 0.03;
+export const STARTUP_LOAN_TERM = 4;
+export const STARTUP_LOAN_CHOICES = [0, INITIAL_CAPITAL, INITIAL_CAPITAL * 2]; // 0 / 1万 / 2万
+
 // =====================================================================
 // 環境カード
 // =====================================================================

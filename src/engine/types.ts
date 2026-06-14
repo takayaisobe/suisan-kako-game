@@ -132,6 +132,8 @@ export interface Player {
   /** 製造ライン増設数（設備強化）。製造可能製品数 = 製造人員 + mfgLines。 */
   mfgLines: number;
   certifications: CertId[];
+  /** 商品開発済みの製品ID（加工品強は開発しないと作れない）。 */
+  developedProducts: ProductId[];
   loans: Loan[];
   usedSalesKg: number;
   /** この日の操業アクション（製造 or 販売）を使い切ったか。1日1アクション制。 */
